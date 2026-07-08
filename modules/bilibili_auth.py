@@ -11,7 +11,7 @@ from typing import Dict, Optional, Tuple
 
 from .bili_sdk import login_v2
 from .bili_sdk.exceptions import ArgsException
-from .bili_sdk.utils.network import Credential
+from .bili_sdk.utils.network import Credential, HEADERS, get_client
 
 from .bilibili_runtime import configure_bilibili_runtime
 
@@ -133,13 +133,28 @@ def validate_credential(credential: Credential) -> Tuple[bool, str]:
     return True, "credential 有效"
 
 
+async def _check_credential_remote(credential: Credential) -> bool:
+    cookies = await credential.get_buvid_cookies()
+    resp = await get_client().request(
+        method="GET",
+        url="https://api.bilibili.com/x/web-interface/nav",
+        headers=HEADERS.copy(),
+        cookies=cookies,
+    )
+    if resp.code != 200:
+        return False
+    data = resp.json()
+    body = data.get("data") or {}
+    return data.get("code") == 0 and bool(body.get("isLogin"))
+
+
 def validate_credential_remote(credential: Credential) -> Tuple[bool, str]:
     ok, msg = validate_credential(credential)
     if not ok:
         return ok, msg
 
     try:
-        if _run_async(credential.check_valid()):
+        if _run_async(_check_credential_remote(credential)):
             return True, "credential 已通过 Bilibili 登录态校验"
     except Exception as exc:
         logger.warning("Bilibili 登录态远程校验失败: %s", exc)
