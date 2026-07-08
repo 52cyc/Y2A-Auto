@@ -9,9 +9,11 @@ import os
 import time
 from typing import Dict, Optional, Tuple
 
-from bilibili_api import login_v2
-from bilibili_api.exceptions import ArgsException
-from bilibili_api.utils.network import Credential
+from .bili_sdk import login_v2
+from .bili_sdk.exceptions import ArgsException
+from .bili_sdk.utils.network import Credential, HEADERS, get_client
+
+from .bilibili_runtime import configure_bilibili_runtime
 
 
 logger = logging.getLogger("bilibili_auth")
@@ -96,6 +98,7 @@ def load_cookie_dict(cookie_file: str) -> Dict[str, str]:
 
 
 def build_credential(cookies: Dict[str, str]) -> Credential:
+    configure_bilibili_runtime()
     cookies = cookies or {}
     return Credential(
         sessdata=cookies.get("SESSDATA") or cookies.get("sessdata"),
@@ -130,6 +133,35 @@ def validate_credential(credential: Credential) -> Tuple[bool, str]:
     return True, "credential 有效"
 
 
+async def _check_credential_remote(credential: Credential) -> bool:
+    cookies = await credential.get_buvid_cookies()
+    resp = await get_client().request(
+        method="GET",
+        url="https://api.bilibili.com/x/web-interface/nav",
+        headers=HEADERS.copy(),
+        cookies=cookies,
+    )
+    if resp.code != 200:
+        return False
+    data = resp.json()
+    body = data.get("data") or {}
+    return data.get("code") == 0 and bool(body.get("isLogin"))
+
+
+def validate_credential_remote(credential: Credential) -> Tuple[bool, str]:
+    ok, msg = validate_credential(credential)
+    if not ok:
+        return ok, msg
+
+    try:
+        if _run_async(_check_credential_remote(credential)):
+            return True, "credential 已通过 Bilibili 登录态校验"
+    except Exception as exc:
+        logger.warning("Bilibili 登录态远程校验失败: %s", exc)
+        return False, f"Bilibili 登录态校验失败: {exc}"
+    return False, "Bilibili 登录态校验未通过，请重新扫码登录"
+
+
 def load_credential_from_file(cookie_file: str) -> Credential:
     cookies = load_cookie_dict(cookie_file)
     credential = build_credential(cookies)
@@ -159,13 +191,29 @@ def save_credential_to_file(credential: Credential, cookie_file: str) -> bool:
         "ac_time_value",
     ]
     cookie_items = []
+    seen_keys = set()
     for key in ordered_keys:
         value = cookies.get(key)
         if value is None or str(value) == "":
             continue
+        seen_keys.add(key)
         cookie_items.append(
             {
                 "name": key,
+                "value": str(value),
+                "domain": ".bilibili.com",
+                "path": "/",
+            }
+        )
+
+    for key, value in cookies.items():
+        if key in seen_keys or value is None or str(value) == "":
+            continue
+        if key.startswith("_") or key == "proxy":
+            continue
+        cookie_items.append(
+            {
+                "name": str(key),
                 "value": str(value),
                 "domain": ".bilibili.com",
                 "path": "/",
@@ -181,6 +229,7 @@ class BilibiliQrLoginSession:
     """In-memory Bilibili QR login session wrapper."""
 
     def __init__(self):
+        configure_bilibili_runtime()
         self.created_at = int(time.time())
         self.qr = login_v2.QrCodeLogin()
         self.generated = False
@@ -215,7 +264,7 @@ class BilibiliQrLoginSession:
 
         if status == login_v2.QrCodeLoginEvents.DONE.value:
             credential = self.qr.get_credential()
-            ok, msg = validate_credential(credential)
+            ok, msg = validate_credential_remote(credential)
             if not ok:
                 payload["status"] = "failed"
                 payload["message"] = msg
