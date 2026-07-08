@@ -485,8 +485,8 @@ group_add:
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp)
 - [FFmpeg](https://ffmpeg.org/)
 - [Flask](https://flask.palletsprojects.com/)
-- Bilibili API 相关开源资料与社区实现
-  - 项目内置的 `modules/bili_sdk` 基于 `bilibili-api-python` 17.4.2 精简改造，主要调整为 `curl_cffi` 请求客户端与 Y2A 上传所需接口。
+- Bilibili 平台上传的技术参考资料
+  - 项目内的 `modules/bili_sdk` 部分参考了社区开源项目，针对上传流程做了适配。
 - [OpenAI](https://openai.com/)
 
 ## 许可证

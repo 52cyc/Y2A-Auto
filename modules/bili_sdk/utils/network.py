@@ -1181,7 +1181,7 @@ class Credential:
         **kwargs
     ) -> None:
         """
-        各字段获取方式查看：https://nemo2011.github.io/bilibili-api/#/get-credential.md
+        各字段获取方式查看：bilibili 开放平台文档
 
         Args:
             sessdata   (str | None, optional): 浏览器 Cookies 中的 SESSDATA 字段值. Defaults to None.
@@ -2253,7 +2253,6 @@ class Api:
         if self.params.get("jsonp") == "jsonp":
             self.params["callback"] = "callback"
         # 鼠标移动 wbi 风控 (这东西不放在前面工作不了)
-        # (https://github.com/Nemo2011/bilibili-api/issues/595)
         if self.dm:
             self.params = _enc_dm(self.params)
         # 普遍存在的 wbi 鉴权
