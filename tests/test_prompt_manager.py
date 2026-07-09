@@ -214,6 +214,18 @@ class SmartSegmentPromptTests(unittest.TestCase):
         self.assertNotIn("{max_duration_s}", prompt)
         self.assertNotIn("{max_cps}", prompt)
 
+    def test_smart_segment_prompt_formats_integer_cps_consistently(self):
+        prompt = get_smart_segment_system_prompt(
+            has_word_timestamps=True,
+            min_duration_s=1,
+            max_duration_s=5,
+            max_cps=15,
+        )
+        self.assertIn("1.00", prompt)
+        self.assertIn("5.00", prompt)
+        self.assertIn("15.0", prompt)
+        self.assertNotIn("15 字/秒", prompt)
+
 
 class MetadataPromptTests(unittest.TestCase):
     def test_metadata_translate_prompt(self):
