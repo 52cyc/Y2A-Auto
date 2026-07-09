@@ -4,6 +4,7 @@ import pathlib
 import re
 import secrets
 import unittest
+from functools import wraps
 
 
 def _load_token_helpers(*names):
@@ -12,7 +13,7 @@ def _load_token_helpers(*names):
     module_ast = ast.parse(source, filename=str(app_path))
     requested = set(names)
     if "_verify_tgbot_api_token" in requested:
-        requested.update({"_is_valid_tgbot_api_token_format", "_hash_tgbot_api_token"})
+        requested.update({"_is_valid_tgbot_api_token_format", "_verify_tgbot_api_token_hash"})
 
     selected = []
     for node in module_ast.body:
@@ -22,6 +23,7 @@ def _load_token_helpers(*names):
                 and target.id in {
                     "TG_BOT_API_TOKEN_PREFIX",
                     "TG_BOT_API_TOKEN_HASH_PREFIX",
+                    "TG_BOT_API_TOKEN_HASH_ITERATIONS",
                     "_TG_BOT_API_TOKEN_RANDOM_RE",
                 }
                 for target in node.targets
@@ -35,9 +37,12 @@ def _load_token_helpers(*names):
         "hashlib": hashlib,
         "re": re,
         "secrets": secrets,
+        "wraps": wraps,
         "load_config": lambda: {},
     }
     exec(compile(isolated_module, str(app_path), "exec"), namespace)
+    for name in names:
+        assert name in namespace, f"{name} was not found in app.py"
     return [namespace[name] for name in names]
 
 
@@ -54,8 +59,9 @@ class TgbotTokenAuthTests(unittest.TestCase):
 
         self.assertTrue(token.startswith("y2a_tgbot_v1_"))
         self.assertTrue(is_valid_format(token))
-        self.assertTrue(token_hash.startswith("sha256:"))
+        self.assertTrue(token_hash.startswith("pbkdf2_sha256:"))
         self.assertNotIn(token, token_hash)
+        self.assertNotEqual(hash_token(token), token_hash)
 
     def test_verify_compares_against_stored_hash(self):
         generate_token, hash_token, verify_token = _load_token_helpers(
@@ -72,10 +78,63 @@ class TgbotTokenAuthTests(unittest.TestCase):
         self.assertFalse(verify_token("not-a-y2a-token", config))
         self.assertFalse(verify_token(token, {"TG_BOT_API_TOKEN_HASH": ""}))
 
+    def test_extract_bearer_token_boundaries(self):
+        extract_bearer_token, = _load_token_helpers("_extract_bearer_token")
+
+        class RequestStub:
+            def __init__(self, authorization):
+                self.headers = {"Authorization": authorization}
+
+        cases = [
+            (None, ""),
+            ("", ""),
+            ("Basic abc", ""),
+            ("Bearer", ""),
+            ("Bearer    ", ""),
+            ("Bearer abc", "abc"),
+            ("bearer   abc  ", "abc"),
+        ]
+        for header, expected in cases:
+            with self.subTest(header=header):
+                extract_bearer_token.__globals__["request"] = RequestStub(header)
+                self.assertEqual(extract_bearer_token(), expected)
+
+    def test_upload_token_decorator_handles_auth_states(self):
+        token_required, = _load_token_helpers("tgbot_upload_token_required")
+
+        class RequestStub:
+            method = "POST"
+
+        def jsonify_stub(payload):
+            return payload
+
+        def endpoint():
+            return {"success": True}
+
+        namespace = token_required.__globals__
+        namespace["request"] = RequestStub()
+        namespace["jsonify"] = jsonify_stub
+        namespace["_is_tgbot_upload_rate_limited"] = lambda: False
+        decorated = token_required(endpoint)
+
+        namespace["load_config"] = lambda: {}
+        self.assertEqual(decorated()[1], 403)
+
+        namespace["load_config"] = lambda: {"TG_BOT_API_TOKEN_HASH": "configured"}
+        namespace["_extract_bearer_token"] = lambda: "invalid"
+        namespace["_verify_tgbot_api_token"] = lambda token, config: False
+        self.assertEqual(decorated()[1], 401)
+
+        namespace["_verify_tgbot_api_token"] = lambda token, config: True
+        self.assertEqual(decorated(), {"success": True})
+
+        namespace["_is_tgbot_upload_rate_limited"] = lambda: True
+        self.assertEqual(decorated()[1], 429)
+
     def test_token_state_does_not_expose_secret(self):
         token_state, = _load_token_helpers("_tgbot_api_token_state")
         state = token_state({
-            "TG_BOT_API_TOKEN_HASH": "sha256:" + "a" * 64,
+            "TG_BOT_API_TOKEN_HASH": "pbkdf2_sha256:260000$salt$" + "a" * 64,
             "TG_BOT_API_TOKEN_CREATED_AT": "2026-07-08 12:00:00",
             "TG_BOT_API_TOKEN_LAST4": "AbCd",
         })

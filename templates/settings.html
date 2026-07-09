@@ -2454,6 +2454,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 });
             })
             .then(function (result) {
+                if (result.data.csrf_token) {
+                    tgbotTokenCard.setAttribute('data-token-csrf', result.data.csrf_token);
+                }
                 if (!result.ok || !result.data.success) {
                     throw new Error(result.data.message || 'Token 操作失败');
                 }
