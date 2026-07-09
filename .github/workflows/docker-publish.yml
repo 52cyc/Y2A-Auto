@@ -4,180 +4,129 @@ on:
   push:
     tags: [ "*.*.*" ]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   REGISTRY_DOCKERHUB: docker.io
   REGISTRY_GHCR: ghcr.io
   IMAGE_NAME: y2a-auto
+  LOCAL_IMAGE: local/y2a-auto
 
 jobs:
-  build:
+  build-test-push:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-    outputs:
-      version: ${{ steps.meta-dockerhub.outputs.version }}
-      version_tag: ${{ steps.meta-dockerhub.outputs.version }}
-    
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v6
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v4
-
-    - name: Log in to Docker Hub
-      if: github.event_name != 'pull_request'
-      uses: docker/login-action@v4
-      with:
-        registry: ${{ env.REGISTRY_DOCKERHUB }}
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-    - name: Log in to GitHub Container Registry
-      if: github.event_name != 'pull_request'
-      uses: docker/login-action@v4
-      with:
-        registry: ${{ env.REGISTRY_GHCR }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Extract metadata for Docker Hub
-      id: meta-dockerhub
-      uses: docker/metadata-action@v6
-      with:
-        images: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
-        tags: |
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
-          type=semver,pattern={{major}}
-
-    - name: Extract metadata for GHCR
-      id: meta-ghcr
-      uses: docker/metadata-action@v6
-      with:
-        images: ${{ env.REGISTRY_GHCR }}/fqscfqj/y2a-auto
-        tags: |
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
-          type=semver,pattern={{major}}
-
-    - name: Validate semver tag metadata
-      shell: bash
-      run: |
-        if [ -z "${{ steps.meta-dockerhub.outputs.tags }}" ] || [ -z "${{ steps.meta-ghcr.outputs.tags }}" ]; then
-          echo "No semver tags were generated; ensure the git tag matches X.Y.Z."
-          exit 1
-        fi
-
-    - name: Build and push Docker image (linux/amd64)
-      uses: docker/build-push-action@v7
-      with:
-        context: .
-        file: ./Dockerfile
-        platforms: linux/amd64
-        push: ${{ github.event_name != 'pull_request' }}
-        tags: |
-          ${{ steps.meta-dockerhub.outputs.tags }}
-          ${{ steps.meta-ghcr.outputs.tags }}
-        labels: |
-          ${{ steps.meta-dockerhub.outputs.labels }}
-          ${{ steps.meta-ghcr.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        build-args: |
-          BUILDTIME=${{ fromJSON(steps.meta-dockerhub.outputs.json).labels['org.opencontainers.image.created'] }}
-          VERSION=${{ fromJSON(steps.meta-dockerhub.outputs.json).labels['org.opencontainers.image.version'] }}
-          REVISION=${{ fromJSON(steps.meta-dockerhub.outputs.json).labels['org.opencontainers.image.revision'] }}
-
-  test:
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.event_name != 'pull_request'
-    permissions:
-      contents: read
 
     steps:
-    - name: Test Docker Hub image
-      env:
-        IMAGE_TAG: ${{ needs.build.outputs.version_tag }}
-      run: |
-        if [ -z "$IMAGE_TAG" ]; then
-          echo "No image tag available from build output."
-          exit 1
-        fi
+      - name: Checkout repository
+        uses: actions/checkout@v6
 
-        # 拉取镜像（带重试，等待镜像在 registry 中可用）
-        pulled=false
-        for i in $(seq 1 6); do
-          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/y2a-auto:$IMAGE_TAG && pulled=true && break
-          echo "拉取失败，重试 $i/6，等待 10 秒..."
-          sleep 10
-        done
-        [ "$pulled" = true ] || { echo "拉取镜像失败（已重试 6 次）"; exit 1; }
-        
-        # 测试镜像启动
-        docker run --rm -d --name test-y2a-auto-dockerhub \
-          -p 5001:5000 \
-          ${{ secrets.DOCKERHUB_USERNAME }}/y2a-auto:$IMAGE_TAG
-        
-        # 等待应用启动（带重试）
-        for i in $(seq 1 12); do
-          curl -sf http://localhost:5001/ && break
-          echo "等待应用启动... ($i/12)"
-          sleep 5
-        done
-        
-        # 验证应用可访问
-        curl -f http://localhost:5001/ || exit 1
-        
-        # 检查 yt-dlp 是否可用
-        docker exec test-y2a-auto-dockerhub yt-dlp --version || exit 1
-        
-        # 检查 VAD 依赖是否完整
-        docker exec test-y2a-auto-dockerhub python -c "import torch, torchaudio, silero_vad; print('VAD deps OK')" || exit 1
-        
-        # 清理
-        docker stop test-y2a-auto-dockerhub
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
 
-    - name: Test GHCR image
-      env:
-        IMAGE_TAG: ${{ needs.build.outputs.version_tag }}
-      run: |
-        if [ -z "$IMAGE_TAG" ]; then
-          echo "No image tag available from build output."
-          exit 1
-        fi
+      - name: Extract metadata for Docker Hub
+        id: meta-dockerhub
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
 
-        # 拉取镜像（带重试，等待镜像在 registry 中可用）
-        pulled=false
-        for i in $(seq 1 6); do
-          docker pull ghcr.io/fqscfqj/y2a-auto:$IMAGE_TAG && pulled=true && break
-          echo "拉取失败，重试 $i/6，等待 10 秒..."
-          sleep 10
-        done
-        [ "$pulled" = true ] || { echo "拉取镜像失败（已重试 6 次）"; exit 1; }
+      - name: Extract metadata for GHCR
+        id: meta-ghcr
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY_GHCR }}/fqscfqj/y2a-auto
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
 
-        # 测试 GHCR 镜像启动
-        docker run --rm -d --name test-y2a-auto-ghcr \
-          -p 5002:5000 \
-          ghcr.io/fqscfqj/y2a-auto:$IMAGE_TAG
-        
-        # 等待应用启动（带重试）
-        for i in $(seq 1 12); do
-          curl -sf http://localhost:5002/ && break
-          echo "等待应用启动... ($i/12)"
-          sleep 5
-        done
-        
-        # 验证应用可访问
-        curl -f http://localhost:5002/ || exit 1
-        
-        # 检查 yt-dlp 是否可用
-        docker exec test-y2a-auto-ghcr yt-dlp --version || exit 1
-        
-        # 检查 VAD 依赖是否完整
-        docker exec test-y2a-auto-ghcr python -c "import torch, torchaudio, silero_vad; print('VAD deps OK')" || exit 1
-        
-        # 清理
-        docker stop test-y2a-auto-ghcr
+      - name: Validate semver tag metadata
+        shell: bash
+        run: |
+          if [ -z "${{ steps.meta-dockerhub.outputs.tags }}" ] || [ -z "${{ steps.meta-ghcr.outputs.tags }}" ]; then
+            echo "No semver tags were generated; ensure the git tag matches X.Y.Z."
+            exit 1
+          fi
+
+      - name: Build local Docker image for validation (linux/amd64)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ env.LOCAL_IMAGE }}:${{ steps.meta-dockerhub.outputs.version }}
+          labels: |
+            ${{ steps.meta-dockerhub.outputs.labels }}
+            ${{ steps.meta-ghcr.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Test local Docker image
+        shell: bash
+        env:
+          IMAGE_TAG: ${{ steps.meta-dockerhub.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$IMAGE_TAG" ]; then
+            echo "No image tag available from metadata output."
+            exit 1
+          fi
+
+          container_name="test-y2a-auto"
+          local_image="${{ env.LOCAL_IMAGE }}:${IMAGE_TAG}"
+          trap 'docker rm -f "$container_name" >/dev/null 2>&1 || true' EXIT
+
+          docker run --rm -d --name "$container_name" -p 5001:5000 "$local_image"
+
+          for i in $(seq 1 12); do
+            if curl -sf http://localhost:5001/ >/dev/null; then
+              break
+            fi
+            echo "Waiting for application startup... ($i/12)"
+            sleep 5
+          done
+
+          curl -f http://localhost:5001/
+          docker exec "$container_name" yt-dlp --version
+          docker exec "$container_name" python -c "import torch, torchaudio, silero_vad; print('VAD deps OK')"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY_DOCKERHUB }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY_GHCR }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push Docker image to registries (linux/amd64)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.meta-dockerhub.outputs.tags }}
+            ${{ steps.meta-ghcr.outputs.tags }}
+          labels: |
+            ${{ steps.meta-dockerhub.outputs.labels }}
+            ${{ steps.meta-ghcr.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

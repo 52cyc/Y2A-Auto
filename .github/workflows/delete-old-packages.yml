@@ -5,6 +5,10 @@ on:
   schedule:
     - cron: '0 0 */14 * *' # Run every 14 days at midnight (UTC)
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 jobs:
   delete-old-docker-images:
     runs-on: ubuntu-latest
@@ -16,7 +20,7 @@ jobs:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_TOKEN }}
           REPO: fqscfqj/y2a-auto
-          KEEP_LAST: 5
+          KEEP_LAST: 12
         run: |
           set -euo pipefail
           echo "Logging into Docker Hub to obtain token..."

@@ -10,6 +10,10 @@ on:
         description: Existing release tag to upload asset to
         required: true
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -74,6 +78,8 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
 
       - name: Install pip dependencies
         run: |
@@ -112,6 +118,13 @@ jobs:
       - name: Archive build output
         run: |
           Compress-Archive -Path build-tools/dist/Y2A-Auto/* -DestinationPath Y2A-Auto-win64.zip
+
+      - name: Validate target GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || github.event.inputs.release_tag }}
+        run: |
+          gh release view "$env:RELEASE_TAG" --json tagName
 
       - name: Upload artifact to existing GitHub Release
         if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
