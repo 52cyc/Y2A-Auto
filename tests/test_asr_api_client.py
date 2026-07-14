@@ -1,10 +1,95 @@
 import unittest
+from unittest.mock import Mock
 
-from modules.asr_api_client import AsrApiClient, AsrConfig
+from modules.asr_api_client import (
+    AsrApiClient,
+    AsrConfig,
+    AsrFormatIncompatibleError,
+    AsrHttpError,
+)
 from modules.subtitle_pipeline_types import DetectedSpeechWindow
 
 
 class AsrApiClientTests(unittest.TestCase):
+    def test_format_error_requires_parameter_rejection(self):
+        plain_error = RuntimeError('request includes response_format')
+        format_error = RuntimeError('invalid response_format: verbose_json')
+
+        self.assertFalse(AsrApiClient._is_format_error(plain_error))
+        self.assertTrue(AsrApiClient._is_format_error(format_error))
+
+    def test_non_validation_http_error_is_not_format_error(self):
+        error = RuntimeError('invalid response_format')
+        error.status_code = 401
+
+        self.assertFalse(AsrApiClient._is_format_error(error))
+
+    def test_language_names_are_normalized_to_iso_codes(self):
+        self.assertEqual(AsrApiClient._normalize_language_code('english'), 'en')
+        self.assertEqual(AsrApiClient._normalize_language_code('Chinese'), 'zh')
+        self.assertEqual(AsrApiClient._normalize_language_code('en-US'), 'en')
+        self.assertEqual(AsrApiClient._normalize_language_code('unknown'), '')
+        self.assertEqual(AsrApiClient._normalize_language_code('not-a-language'), '')
+
+    def test_set_language_hint_normalizes_detected_language_name(self):
+        client = AsrApiClient(AsrConfig(api_key=''))
+        client.set_language_hint('english')
+        self.assertEqual(client._language_hint, 'en')
+
+    def test_raw_http_errors_preserve_status_for_format_classification(self):
+        for status_code in (401, 429, 500):
+            with self.subTest(status_code=status_code):
+                error = AsrHttpError(status_code, 'invalid response_format: verbose_json')
+                self.assertEqual(error.status_code, status_code)
+                self.assertFalse(AsrApiClient._is_format_error(error))
+
+        validation_error = AsrHttpError(400, 'invalid response_format: verbose_json')
+        self.assertTrue(AsrApiClient._is_format_error(validation_error))
+
+    def test_probe_accepts_empty_verbose_json_as_supported_format(self):
+        client = AsrApiClient(AsrConfig(api_key=''))
+        client._request_whisper_raw_json = Mock(return_value={
+            'text': '',
+            'segments': [],
+            'language': 'en',
+            'duration': 1.0,
+        })
+        client._request_whisper_response = Mock()
+
+        probe = client._probe_capabilities('clip.wav', 'whisper-1', window=None)
+
+        self.assertEqual(probe.transcription_format, 'verbose_json')
+        self.assertEqual(probe.transcription_granularities, ('segment', 'word'))
+        self.assertIsNotNone(probe.transcription_result)
+        self.assertFalse(probe.transcription_result.ok)
+        client._request_whisper_response.assert_not_called()
+
+    def test_probe_falls_back_after_explicit_format_rejection(self):
+        client = AsrApiClient(AsrConfig(api_key=''))
+        format_error = RuntimeError('invalid timestamp_granularities')
+        client._request_whisper_raw_json = Mock(side_effect=[
+            format_error,
+            {'text': '', 'segments': [], 'duration': 1.0},
+        ])
+        client._request_whisper_response = Mock(side_effect=[format_error])
+
+        probe = client._probe_capabilities('clip.wav', 'whisper-1', window=None)
+
+        self.assertEqual(probe.transcription_format, 'verbose_json')
+        self.assertEqual(probe.transcription_granularities, ('segment',))
+
+    def test_probe_does_not_treat_error_payload_as_empty_transcription(self):
+        client = AsrApiClient(AsrConfig(api_key=''))
+        client._request_whisper_raw_json = Mock(return_value={
+            'error': {'message': 'model unavailable'},
+        })
+
+        with self.assertRaises(RuntimeError) as context:
+            client._probe_capabilities('clip.wav', 'whisper-1', window=None)
+
+        self.assertNotIsInstance(context.exception, AsrFormatIncompatibleError)
+        self.assertIn('错误对象', str(context.exception))
+
     def test_whisper_granularity_candidates_prefer_word_then_fallback(self):
         client = AsrApiClient(AsrConfig(api_key='', timestamp_granularities='segment,word'))
 
