@@ -58,6 +58,14 @@ class YouTubeJsRuntimeOptionsTests(unittest.TestCase):
             ["--js-runtimes", "deno", "--js-runtimes", "node"],
         )
 
+    def test_uses_deno_when_node_is_unavailable(self):
+        detect_args = _load_function("_detect_js_runtime_args")
+        detect_args.__globals__["_which"] = mock.Mock(
+            side_effect=lambda runtime: "/deno" if runtime == "deno" else None
+        )
+
+        self.assertEqual(detect_args(), ["--js-runtimes", "deno"])
+
     def test_uses_node_when_deno_is_unavailable(self):
         detect_args = _load_function("_detect_js_runtime_args")
         detect_args.__globals__["_which"] = mock.Mock(
