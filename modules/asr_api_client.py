@@ -108,6 +108,12 @@ class AsrRequestError(RuntimeError):
     pass
 
 
+class AsrHttpError(RuntimeError):
+    def __init__(self, status_code: int, response_text: str):
+        self.status_code = int(status_code)
+        super().__init__(f"HTTP {self.status_code}: {response_text[:300]}")
+
+
 class ImplausibleAsrResultError(RuntimeError):
     pass
 
@@ -578,7 +584,7 @@ class AsrApiClient:
                 timeout=max(30.0, float(self.config.request_timeout_s or 300.0)),
             )
         if response.status_code != 200:
-            raise RuntimeError(f"HTTP {response.status_code}: {response.text[:300]}")
+            raise AsrHttpError(response.status_code, response.text)
         payload: Dict[str, Any] = response.json()
         return payload
 
@@ -817,7 +823,7 @@ class AsrApiClient:
                             timeout=max(30.0, float(self.config.request_timeout_s or 300.0)),
                         )
                     if response.status_code != 200:
-                        raise RuntimeError(f"HTTP {response.status_code}: {response.text[:300]}")
+                        raise AsrHttpError(response.status_code, response.text)
                     payload = response.json()
                     result = self._payload_to_transcription_result(
                         payload,

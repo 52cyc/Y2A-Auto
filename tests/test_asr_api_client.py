@@ -1,7 +1,12 @@
 import unittest
 from unittest.mock import Mock
 
-from modules.asr_api_client import AsrApiClient, AsrConfig, AsrFormatIncompatibleError
+from modules.asr_api_client import (
+    AsrApiClient,
+    AsrConfig,
+    AsrFormatIncompatibleError,
+    AsrHttpError,
+)
 from modules.subtitle_pipeline_types import DetectedSpeechWindow
 
 
@@ -18,6 +23,16 @@ class AsrApiClientTests(unittest.TestCase):
         error.status_code = 401
 
         self.assertFalse(AsrApiClient._is_format_error(error))
+
+    def test_raw_http_errors_preserve_status_for_format_classification(self):
+        for status_code in (401, 429, 500):
+            with self.subTest(status_code=status_code):
+                error = AsrHttpError(status_code, 'invalid response_format: verbose_json')
+                self.assertEqual(error.status_code, status_code)
+                self.assertFalse(AsrApiClient._is_format_error(error))
+
+        validation_error = AsrHttpError(400, 'invalid response_format: verbose_json')
+        self.assertTrue(AsrApiClient._is_format_error(validation_error))
 
     def test_probe_accepts_empty_verbose_json_as_supported_format(self):
         client = AsrApiClient(AsrConfig(api_key=''))
