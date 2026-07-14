@@ -24,6 +24,18 @@ class AsrApiClientTests(unittest.TestCase):
 
         self.assertFalse(AsrApiClient._is_format_error(error))
 
+    def test_language_names_are_normalized_to_iso_codes(self):
+        self.assertEqual(AsrApiClient._normalize_language_code('english'), 'en')
+        self.assertEqual(AsrApiClient._normalize_language_code('Chinese'), 'zh')
+        self.assertEqual(AsrApiClient._normalize_language_code('en-US'), 'en')
+        self.assertEqual(AsrApiClient._normalize_language_code('unknown'), '')
+        self.assertEqual(AsrApiClient._normalize_language_code('not-a-language'), '')
+
+    def test_set_language_hint_normalizes_detected_language_name(self):
+        client = AsrApiClient(AsrConfig(api_key=''))
+        client.set_language_hint('english')
+        self.assertEqual(client._language_hint, 'en')
+
     def test_raw_http_errors_preserve_status_for_format_classification(self):
         for status_code in (401, 429, 500):
             with self.subTest(status_code=status_code):

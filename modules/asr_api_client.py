@@ -131,8 +131,46 @@ class AsrApiClient:
         self._logged_capability_signature: Optional[Tuple[str, str, Tuple[str, ...]]] = None
         self._init_client()
 
+    @staticmethod
+    def _normalize_language_code(lang: Any) -> str:
+        value = str(lang or '').strip().lower().replace('_', '-')
+        if not value or value == 'unknown':
+            return ''
+        aliases = {
+            'english': 'en',
+            'chinese': 'zh',
+            'mandarin': 'zh',
+            'cantonese': 'zh',
+            'japanese': 'ja',
+            'korean': 'ko',
+            'spanish': 'es',
+            'french': 'fr',
+            'german': 'de',
+            'italian': 'it',
+            'portuguese': 'pt',
+            'russian': 'ru',
+            'arabic': 'ar',
+            'hindi': 'hi',
+            'dutch': 'nl',
+            'turkish': 'tr',
+            'polish': 'pl',
+            'swedish': 'sv',
+            'indonesian': 'id',
+            'vietnamese': 'vi',
+            'thai': 'th',
+        }
+        if value in aliases:
+            return aliases[value]
+        primary = value.split('-', 1)[0]
+        if len(primary) == 2 and primary.isalpha():
+            return primary
+        return ''
+
     def set_language_hint(self, lang: str):
-        self._language_hint = str(lang or '').strip()
+        normalized = self._normalize_language_code(lang)
+        if lang and not normalized:
+            self.logger.warning("Ignoring unsupported ASR language hint: %s", lang)
+        self._language_hint = normalized
 
     def _init_client(self):
         if not self.config.api_key:
@@ -514,8 +552,8 @@ class AsrApiClient:
             if temperature is not None:
                 params['temperature'] = temperature
             if include_language_hint:
-                language = self._language_hint or self.config.language
-                if language and language.lower() != 'unknown':
+                language = self._language_hint or self._normalize_language_code(self.config.language)
+                if language:
                     params['language'] = language
             if include_prompt:
                 prompt = str(self.config.prompt or '').strip()
@@ -565,8 +603,8 @@ class AsrApiClient:
 
         form_data: List[Tuple[str, str]] = [('model', model), ('response_format', 'verbose_json')]
         if include_language_hint:
-            language = (self._language_hint or self.config.language or '').strip()
-            if language and language.lower() != 'unknown':
+            language = self._language_hint or self._normalize_language_code(self.config.language)
+            if language:
                 form_data.append(('language', language))
         if include_prompt:
             prompt = str(self.config.prompt or '').strip()
@@ -1006,7 +1044,7 @@ class AsrApiClient:
         durations: Dict[str, float] = {}
         first_seen: Dict[str, int] = {}
         for index, (lang, duration_s) in enumerate(detected):
-            normalized_lang = str(lang or '').strip()
+            normalized_lang = self._normalize_language_code(lang)
             if not normalized_lang:
                 continue
             counts[normalized_lang] = counts.get(normalized_lang, 0) + 1
