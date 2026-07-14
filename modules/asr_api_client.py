@@ -104,6 +104,10 @@ class AsrFormatIncompatibleError(RuntimeError):
     pass
 
 
+class AsrRequestError(RuntimeError):
+    pass
+
+
 class ImplausibleAsrResultError(RuntimeError):
     pass
 
@@ -149,13 +153,49 @@ class AsrApiClient:
 
     @staticmethod
     def _is_format_error(exc: Exception) -> bool:
+        if isinstance(exc, AsrRequestError):
+            return False
         err_str = str(exc).lower()
-        return (
-            'response_format' in err_str
-            or 'timestamp_granularities' in err_str
-            or 'unsupported format' in err_str
-            or ('format' in err_str and ('not supported' in err_str or 'invalid' in err_str))
+        status_code = getattr(exc, 'status_code', None)
+        if status_code is None:
+            response = getattr(exc, 'response', None)
+            status_code = getattr(response, 'status_code', None)
+        if status_code is not None and int(status_code) not in (400, 422):
+            return False
+        parameter_markers = (
+            'response_format',
+            'response format',
+            'timestamp_granularities',
+            'timestamp granularities',
+            'unsupported format',
         )
+        rejection_markers = (
+            'unsupported',
+            'not supported',
+            'invalid',
+            'unknown',
+            'unrecognized',
+            'not allowed',
+            'not permitted',
+        )
+        return (
+            'unsupported format' in err_str
+            or (
+                any(marker in err_str for marker in parameter_markers)
+                and any(marker in err_str for marker in rejection_markers)
+            )
+        )
+
+    @staticmethod
+    def _validate_verbose_json_payload(payload: Any) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise RuntimeError("ASR verbose_json 响应不是 JSON 对象")
+        if payload.get('error'):
+            raise RuntimeError(f"ASR API 返回错误对象: {str(payload['error'])[:300]}")
+        expected_fields = {'text', 'segments', 'words', 'language', 'duration'}
+        if not expected_fields.intersection(payload):
+            raise RuntimeError("ASR verbose_json 响应缺少预期字段")
+        return payload
 
     @staticmethod
     def _text_density_metrics(text: str) -> Tuple[int, int]:
@@ -293,6 +333,7 @@ class AsrApiClient:
         for granularities in self._whisper_granularity_candidates():
             try:
                 # Prefer raw HTTP to preserve segment-level words.
+                raw_exc: Optional[Exception] = None
                 try:
                     payload = self._request_whisper_raw_json(
                         wav_path,
@@ -301,16 +342,27 @@ class AsrApiClient:
                         include_language_hint=include_language_hint,
                         include_prompt=include_prompt,
                     )
-                except Exception:
-                    response = self._request_whisper_response(
-                        wav_path,
-                        model,
-                        'verbose_json',
-                        granularities=granularities,
-                        include_language_hint=include_language_hint,
-                        include_prompt=include_prompt,
-                    )
-                    payload = self._as_dict(response) or {}
+                except Exception as exc:
+                    raw_exc = exc
+                    try:
+                        response = self._request_whisper_response(
+                            wav_path,
+                            model,
+                            'verbose_json',
+                            granularities=granularities,
+                            include_language_hint=include_language_hint,
+                            include_prompt=include_prompt,
+                        )
+                        payload = self._as_dict(response)
+                    except Exception as sdk_exc:
+                        if self._is_format_error(raw_exc) and self._is_format_error(sdk_exc):
+                            raise sdk_exc
+                        raise AsrRequestError(
+                            "ASR verbose_json 请求失败；"
+                            f"raw={type(raw_exc).__name__}: {str(raw_exc)[:300]}; "
+                            f"sdk={type(sdk_exc).__name__}: {str(sdk_exc)[:300]}"
+                        ) from sdk_exc
+                payload = self._validate_verbose_json_payload(payload)
                 result = self._payload_to_transcription_result(
                     payload,
                     provider='whisper',
@@ -319,14 +371,13 @@ class AsrApiClient:
                     window=window,
                     granularities=granularities,
                 )
-                if result.ok:
-                    return _AsrCapabilityProbeResult(
-                        transcription_format='verbose_json',
-                        language_detection_format='verbose_json',
-                        transcription_granularities=granularities,
-                        transcription_result=result,
-                        language_data=payload,
-                    )
+                return _AsrCapabilityProbeResult(
+                    transcription_format='verbose_json',
+                    language_detection_format='verbose_json',
+                    transcription_granularities=granularities,
+                    transcription_result=result,
+                    language_data=payload,
+                )
             except Exception as exc:
                 if self._is_format_error(exc):
                     format_errors.append(exc)
@@ -344,20 +395,19 @@ class AsrApiClient:
                     include_prompt=include_prompt,
                 )
             )
-            if srt_text:
-                return _AsrCapabilityProbeResult(
-                    transcription_format='srt',
-                    language_detection_format='json',
-                    transcription_granularities=tuple(),
-                    transcription_result=AsrTranscriptionResult(
-                        provider='whisper',
-                        response_format='srt',
-                        timestamp_mode='srt',
-                        text=srt_text,
-                        window=window,
-                        failure_token='asr_no_timestamps',
-                    ),
-                )
+            return _AsrCapabilityProbeResult(
+                transcription_format='srt',
+                language_detection_format='json',
+                transcription_granularities=tuple(),
+                transcription_result=AsrTranscriptionResult(
+                    provider='whisper',
+                    response_format='srt',
+                    timestamp_mode='srt',
+                    text=srt_text,
+                    window=window,
+                    failure_token='asr_no_timestamps' if srt_text else 'asr_failed',
+                ),
+            )
         except Exception as exc:
             if self._is_format_error(exc):
                 format_errors.append(exc)
@@ -414,13 +464,27 @@ class AsrApiClient:
             raise
 
         with self._capability_probe_condition:
+            self._capability_cache.transcription_format = probe_result.transcription_format
+            self._capability_cache.language_detection_format = probe_result.language_detection_format
+            self._capability_cache.transcription_granularities = tuple(
+                probe_result.transcription_granularities or ()
+            )
+            self._capability_probe_incompatible = False
             self._capability_probe_in_progress = False
             self._capability_probe_condition.notify_all()
-        self._cache_capabilities(
-            transcription_fmt=probe_result.transcription_format,
-            language_detection_fmt=probe_result.language_detection_format,
-            transcription_granularities=probe_result.transcription_granularities,
-        )
+            signature = (
+                self._capability_cache.transcription_format or '',
+                self._capability_cache.language_detection_format or '',
+                tuple(self._capability_cache.transcription_granularities),
+            )
+            if signature != self._logged_capability_signature:
+                self._logged_capability_signature = signature
+                self.logger.info(
+                    "Cached ASR response mode: format=%s, language_detection=%s, granularity=%s",
+                    signature[0],
+                    signature[1],
+                    ','.join(signature[2]) if signature[2] else 'none',
+                )
         return probe_result
 
     def _request_whisper_response(
@@ -537,7 +601,7 @@ class AsrApiClient:
                     model,
                     window=window,
                 )
-                if probe_result.transcription_result and probe_result.transcription_result.ok:
+                if probe_result.transcription_result is not None:
                     return probe_result.transcription_result
                 result = self._transcribe_with_cached_capabilities(
                     wav_path,
