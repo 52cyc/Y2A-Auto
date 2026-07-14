@@ -1,5 +1,5 @@
 # Keep yt-dlp rolling because extractor fixes are time-sensitive.
-yt-dlp
+yt-dlp[default]
 
 # Web runtime: lock to the current compatible release line for stability.
 flask~=3.1.3
