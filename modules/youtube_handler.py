@@ -63,11 +63,11 @@ def _resolve_safe_cookies_path(cookies_file_path: str, log: logging.Logger | Non
 
 def _detect_js_runtime_args() -> list[str]:
     """检测可供 yt-dlp 使用的 JS runtime。"""
-    for runtime in ('node', 'deno'):
-        runtime_path = _which(runtime)
-        if runtime_path:
-            return ['--js-runtimes', runtime]
-    return []
+    args: list[str] = []
+    for runtime in ('deno', 'node'):
+        if _which(runtime):
+            args.extend(['--js-runtimes', runtime])
+    return args
 
 
 def _get_youtube_runtime_args() -> list[str]:

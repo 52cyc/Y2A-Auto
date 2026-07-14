@@ -1,6 +1,7 @@
 import ast
 import pathlib
 import unittest
+from unittest import mock
 
 
 def _load_function(name):
@@ -43,6 +44,33 @@ class YouTubeSubtitleDownloadOptionsTests(unittest.TestCase):
 
         self.assertIn("--write-auto-subs", args)
         self.assertEqual(args[:-1], ["--write-subs", "--all-subs", "--convert-subs", "srt"])
+
+
+class YouTubeJsRuntimeOptionsTests(unittest.TestCase):
+    def test_prefers_deno_and_keeps_node_as_fallback(self):
+        detect_args = _load_function("_detect_js_runtime_args")
+        detect_args.__globals__["_which"] = mock.Mock(
+            side_effect=lambda runtime: f"/{runtime}" if runtime in {"deno", "node"} else None
+        )
+
+        self.assertEqual(
+            detect_args(),
+            ["--js-runtimes", "deno", "--js-runtimes", "node"],
+        )
+
+    def test_uses_node_when_deno_is_unavailable(self):
+        detect_args = _load_function("_detect_js_runtime_args")
+        detect_args.__globals__["_which"] = mock.Mock(
+            side_effect=lambda runtime: "/node" if runtime == "node" else None
+        )
+
+        self.assertEqual(detect_args(), ["--js-runtimes", "node"])
+
+    def test_returns_no_args_without_a_runtime(self):
+        detect_args = _load_function("_detect_js_runtime_args")
+        detect_args.__globals__["_which"] = mock.Mock(return_value=None)
+
+        self.assertEqual(detect_args(), [])
 
 
 if __name__ == "__main__":
