@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import os
+import sys
 import time
 import json
 import uuid
@@ -20,7 +21,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.executors.pool import ThreadPoolExecutor as APSchedulerThreadPoolExecutor
 from apscheduler.schedulers.base import SchedulerNotRunningError
 import queue
-from .utils import get_app_subdir
+from .utils import get_app_root_dir, get_app_subdir
 from .ffmpeg_manager import get_ffmpeg_path, get_ffprobe_path
 from .notifications import (
     EVENT_TASK_ADDED,
@@ -426,7 +427,7 @@ def resolve_cookie_file_path(
     if not raw_path:
         return ''
 
-    app_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    app_root = get_app_root_dir()
     resolved_path = raw_path if os.path.isabs(raw_path) else os.path.join(app_root, raw_path)
     resolved_path = os.path.normpath(resolved_path)
 
@@ -458,6 +459,45 @@ def resolve_cookie_file_path(
         return alt_path
 
     return resolved_path
+
+
+def resolve_youtube_cookies_path(config, logger_obj=None):
+    """优先解析配置路径，仅在目标缺失时兼容旧版 Cookie 存放位置。"""
+    target_logger = logger_obj if logger_obj is not None else logger
+    configured_path = str((config or {}).get('YOUTUBE_COOKIES_PATH', 'cookies/yt_cookies.txt') or '').strip()
+    resolved_path = resolve_cookie_file_path(
+        configured_path,
+        'cookies/yt_cookies.txt',
+        service_name='YouTube',
+        logger_obj=target_logger,
+    )
+    if os.path.isfile(resolved_path):
+        return resolved_path
+
+    app_root = get_app_root_dir()
+    file_name = os.path.basename(configured_path or 'yt_cookies.txt')
+    legacy_candidates = [os.path.join(app_root, 'config', file_name)]
+    if getattr(sys, 'frozen', False) and configured_path and not os.path.isabs(configured_path):
+        legacy_candidates.append(os.path.join(app_root, '_internal', configured_path))
+
+    normalized_target = os.path.normcase(os.path.normpath(resolved_path))
+    seen = {normalized_target}
+    for candidate in legacy_candidates:
+        normalized_candidate = os.path.normcase(os.path.normpath(candidate))
+        if normalized_candidate in seen:
+            continue
+        seen.add(normalized_candidate)
+        if not os.path.isfile(candidate):
+            continue
+        target_logger.warning(
+            "配置的YouTube Cookies文件不存在，临时回退到旧版路径: %s；"
+            "请重新上传或同步 Cookies 以迁移到配置路径。",
+            candidate,
+        )
+        return candidate
+
+    target_logger.warning("指定的YouTube Cookies文件不存在: %s", resolved_path)
+    return None
 
 
 def _get_task_upload_target(task, fallback=UPLOAD_TARGET_ACFUN):
@@ -2579,19 +2619,7 @@ class TaskProcessor:
 
         _raise_if_cancelled(task_id, task_logger)
         
-        # 获取cookies文件路径，优先使用config目录下的文件
-        cookies_filename = os.path.basename(self.config.get('YOUTUBE_COOKIES_PATH', 'cookies.txt'))
-        # 首先尝试在config目录中查找
-        config_cookies_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config', cookies_filename)
-        if os.path.exists(config_cookies_path):
-            cookies_path = config_cookies_path
-            task_logger.info(f"使用config目录中的cookies文件: {cookies_path}")
-        else:
-            # 如果config目录中不存在，则尝试使用配置中指定的路径
-            cookies_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), self.config.get('YOUTUBE_COOKIES_PATH', ''))
-            if not os.path.exists(cookies_path):
-                task_logger.warning(f"指定的YouTube Cookies文件不存在: {cookies_path}")
-                cookies_path = None
+        cookies_path = resolve_youtube_cookies_path(self.config, task_logger)
         
         # 验证cookies文件
         if cookies_path:
@@ -2653,19 +2681,7 @@ class TaskProcessor:
 
         _raise_if_cancelled(task_id, task_logger)
         
-        # 获取cookies文件路径，优先使用config目录下的文件
-        cookies_filename = os.path.basename(self.config.get('YOUTUBE_COOKIES_PATH', 'cookies.txt'))
-        # 首先尝试在config目录中查找
-        config_cookies_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config', cookies_filename)
-        if os.path.exists(config_cookies_path):
-            cookies_path = config_cookies_path
-            task_logger.info(f"使用config目录中的cookies文件: {cookies_path}")
-        else:
-            # 如果config目录中不存在，则尝试使用配置中指定的路径
-            cookies_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), self.config.get('YOUTUBE_COOKIES_PATH', ''))
-            if not os.path.exists(cookies_path):
-                task_logger.warning(f"指定的YouTube Cookies文件不存在: {cookies_path}")
-                cookies_path = None
+        cookies_path = resolve_youtube_cookies_path(self.config, task_logger)
         
         # 验证cookies文件
         if cookies_path:
@@ -2839,18 +2855,7 @@ class TaskProcessor:
                 youtube_url,
             ]
 
-            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            configured_cookies_path = self.config.get('YOUTUBE_COOKIES_PATH', '')
-            cookies_path = None
-            if configured_cookies_path:
-                cookies_filename = os.path.basename(configured_cookies_path)
-                config_cookies_path = os.path.join(project_root, 'config', cookies_filename)
-                if os.path.isfile(config_cookies_path):
-                    cookies_path = config_cookies_path
-                else:
-                    candidate_cookies_path = os.path.join(project_root, configured_cookies_path)
-                    if os.path.isfile(candidate_cookies_path):
-                        cookies_path = candidate_cookies_path
+            cookies_path = resolve_youtube_cookies_path(self.config, task_logger)
 
             if cookies_path:
                 cookies_path = _resolve_safe_cookies_path(cookies_path, task_logger)

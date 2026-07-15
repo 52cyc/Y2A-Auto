@@ -5,11 +5,11 @@ import base64
 import hashlib
 import json
 import os
-import sys
 from typing import Any, Iterable
 from urllib.parse import quote, urlparse, urlunparse
 
 import requests
+from .utils import get_app_root_dir
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
@@ -52,10 +52,8 @@ class CookieCloudDataError(CookieCloudError):
     """返回数据不符合预期。"""
 
 
-def _get_app_root_dir() -> str:
-    if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+class CookieCloudWriteError(CookieCloudError):
+    """Cookie 文件写入失败。"""
 
 
 def _as_bool(value: Any) -> bool:
@@ -154,8 +152,16 @@ def fetch_cookiecloud_payload(
     try:
         response = requester.get(request_url, timeout=timeout)
         response.raise_for_status()
+    except requests.Timeout as exc:
+        raise CookieCloudRequestError("CookieCloud 服务请求超时。") from exc
+    except requests.HTTPError as exc:
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        status_label = str(status_code) if status_code is not None else "未知"
+        raise CookieCloudRequestError(f"CookieCloud 服务返回 HTTP {status_label}。") from exc
+    except requests.ConnectionError as exc:
+        raise CookieCloudRequestError("CookieCloud 服务连接失败。") from exc
     except requests.RequestException as exc:
-        raise CookieCloudRequestError("CookieCloud 服务请求失败，请检查服务地址与网络连通性。") from exc
+        raise CookieCloudRequestError("CookieCloud 服务请求失败。") from exc
 
     try:
         payload = response.json()
@@ -423,7 +429,7 @@ def build_youtube_netscape_cookies(cookie_payload: dict[str, Any]) -> tuple[str,
 
 def resolve_cookie_output_path(path_value: Any, default_relative_path: str = DEFAULT_YOUTUBE_COOKIES_PATH) -> str:
     raw_path = _coerce_text(path_value) or default_relative_path
-    app_root = os.path.realpath(_get_app_root_dir())
+    app_root = os.path.realpath(get_app_root_dir())
     resolved = os.path.realpath(raw_path) if os.path.isabs(raw_path) else os.path.realpath(os.path.join(app_root, raw_path))
     try:
         common_path = os.path.commonpath([app_root, resolved])
@@ -435,7 +441,7 @@ def resolve_cookie_output_path(path_value: Any, default_relative_path: str = DEF
 
 
 def make_display_path(path_value: str) -> str:
-    app_root = os.path.realpath(_get_app_root_dir())
+    app_root = os.path.realpath(get_app_root_dir())
     resolved = os.path.realpath(path_value)
     try:
         common_path = os.path.commonpath([app_root, resolved])
@@ -483,9 +489,12 @@ def _write_cookie_file(target_path: str, cookie_text: str) -> None:
     after the user has explicitly opted in via COOKIECLOUD_ALLOW_PLAINTEXT_EXPORT.
     The file uses Netscape cookie format consumed by yt-dlp.
     """
-    os.makedirs(os.path.dirname(target_path), exist_ok=True)
-    with open(target_path, "w", encoding="utf-8", newline="\n") as file_obj:
-        file_obj.write(cookie_text)
+    try:
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        with open(target_path, "w", encoding="utf-8", newline="\n") as file_obj:
+            file_obj.write(cookie_text)
+    except OSError as exc:
+        raise CookieCloudWriteError("CookieCloud Cookies 文件写入失败。") from exc
 
 
 def sync_cookiecloud_to_youtube_file(
@@ -549,5 +558,7 @@ def try_cookiecloud_youtube_sync(
             effective_config, timeout=timeout, session=session,
         )
         return True, result
+    except CookieCloudError as exc:
+        return False, f"{type(exc).__name__}: {exc}"
     except Exception:
-        return False, "CookieCloud 同步失败"
+        return False, "CookieCloud 同步发生未预期错误"

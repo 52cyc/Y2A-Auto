@@ -680,7 +680,7 @@ def _extract_settings_uploads(files_storage) -> dict:
 
 
 def _persist_settings_uploads(form_data: dict, uploads: dict):
-    cookies_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cookies')
+    cookies_dir = get_app_subdir('cookies')
     os.makedirs(cookies_dir, exist_ok=True)
 
     file_specs = {
@@ -2892,10 +2892,10 @@ def settings_test_cookiecloud():
             'updated_at': updated_at,
             'status': 'success',
         })
-    except CookieCloudError:
+    except CookieCloudError as exc:
         message = _cookiecloud_operation_error_message('test')
         updated_at = _remember_cookiecloud_sync_result(False, message)
-        logger.warning('CookieCloud 连接测试失败')
+        logger.warning('CookieCloud 连接测试失败（%s）: %s', type(exc).__name__, exc)
         return jsonify({
             'success': False,
             'message': message,
@@ -2936,10 +2936,10 @@ def settings_sync_cookiecloud():
             'updated_at': updated_at,
             'status': 'success',
         })
-    except CookieCloudError:
+    except CookieCloudError as exc:
         message = _cookiecloud_operation_error_message('sync')
         updated_at = _remember_cookiecloud_sync_result(False, message)
-        logger.warning('CookieCloud 立即拉取失败')
+        logger.warning('CookieCloud 立即拉取失败（%s）: %s', type(exc).__name__, exc)
         return jsonify({
             'success': False,
             'message': message,
@@ -3713,7 +3713,7 @@ def sync_cookies():
             return jsonify({'error': 'cookie数据无效'}), 400
         
         # 保存cookie到文件
-        cookies_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cookies')
+        cookies_dir = get_app_subdir('cookies')
         os.makedirs(cookies_dir, exist_ok=True)
         
         youtube_cookies_path = os.path.join(cookies_dir, 'yt_cookies.txt')
@@ -3757,7 +3757,7 @@ def get_cookie_status():
     提供Cookie状态给浏览器扩展
     """
     try:
-        cookies_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cookies')
+        cookies_dir = get_app_subdir('cookies')
         youtube_cookies_path = os.path.join(cookies_dir, 'yt_cookies.txt')
         
         status = {

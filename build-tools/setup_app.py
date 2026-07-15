@@ -11,6 +11,20 @@ import platform
 import locale
 from pathlib import Path
 
+INTERNAL_YT_DLP_FLAG = '--y2a-internal-yt-dlp'
+
+
+def run_internal_yt_dlp_cli(argv=None):
+    """在冻结程序内提供 yt-dlp CLI 入口，正常启动时返回 None。"""
+    args = list(sys.argv[1:] if argv is None else argv)
+    if not args or args[0] != INTERNAL_YT_DLP_FLAG:
+        return None
+
+    from yt_dlp import main as yt_dlp_main
+
+    result = yt_dlp_main(args[1:])
+    return result if isinstance(result, int) else 0
+
 def setup_chinese_encoding():
     """设置中文编码支持"""
     if platform.system() == "Windows":
@@ -180,6 +194,10 @@ def start_application(app_path, is_frozen):
 
 def main():
     """主函数"""
+    internal_exit_code = run_internal_yt_dlp_cli()
+    if internal_exit_code is not None:
+        return internal_exit_code
+
     print("初始化 Y2A-Auto 应用环境...")
     
     try:
@@ -205,4 +223,4 @@ def main():
         sys.exit(1)
 
 if __name__ == '__main__':
-    main() 
+    sys.exit(main())

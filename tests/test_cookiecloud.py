@@ -5,20 +5,28 @@ import os
 import pathlib
 import shutil
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+
+import requests
 
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from modules.cookiecloud import (
     CookieCloudConfigError,
+    CookieCloudDecryptError,
+    CookieCloudRequestError,
+    CookieCloudWriteError,
     COOKIECLOUD_CRYPTO_AES_128_CBC_FIXED,
     COOKIECLOUD_CRYPTO_LEGACY,
     build_cookiecloud_get_url,
     build_youtube_netscape_cookies,
     decrypt_cookiecloud_payload,
+    fetch_cookiecloud_payload,
     resolve_cookie_output_path,
     sync_cookiecloud_to_youtube_file,
+    try_cookiecloud_youtube_sync,
+    _write_cookie_file,
 )
 
 
@@ -384,6 +392,67 @@ class CookieCloudTests(unittest.TestCase):
         self.assertTrue(self.sync_absolute_path.exists())
         written = self.sync_absolute_path.read_text(encoding="utf-8")
         self.assertIn("SAPISID", written)
+
+    def test_fetch_cookiecloud_payload_classifies_timeout_without_leaking_credentials(self):
+        session = Mock()
+        session.get.side_effect = requests.Timeout(
+            f"https://cookiecloud.example.com/get/{TEST_CC_USER}?password={TEST_CC_KEY}"
+        )
+
+        with self.assertRaisesRegex(CookieCloudRequestError, "请求超时") as raised:
+            fetch_cookiecloud_payload(
+                "https://cookiecloud.example.com",
+                TEST_CC_USER,
+                session=session,
+            )
+
+        message = str(raised.exception)
+        self.assertNotIn(TEST_CC_USER, message)
+        self.assertNotIn(TEST_CC_KEY, message)
+        self.assertNotIn("cookiecloud.example.com", message)
+
+    def test_fetch_cookiecloud_payload_reports_http_status_only(self):
+        response = requests.Response()
+        response.status_code = 404
+        session = Mock()
+        session.get.side_effect = requests.HTTPError(
+            f"404 for https://cookiecloud.example.com/get/{TEST_CC_USER}",
+            response=response,
+        )
+
+        with self.assertRaisesRegex(CookieCloudRequestError, "HTTP 404") as raised:
+            fetch_cookiecloud_payload(
+                "https://cookiecloud.example.com",
+                TEST_CC_USER,
+                session=session,
+            )
+
+        self.assertNotIn(TEST_CC_USER, str(raised.exception))
+        self.assertNotIn("cookiecloud.example.com", str(raised.exception))
+
+    def test_try_cookiecloud_sync_returns_safe_typed_reason(self):
+        with patch(
+            "modules.cookiecloud.sync_cookiecloud_to_youtube_file",
+            side_effect=CookieCloudDecryptError("CookieCloud 凭据无效或解密失败。"),
+        ):
+            success, reason = try_cookiecloud_youtube_sync({
+                "COOKIECLOUD_ENABLED": True,
+                "COOKIECLOUD_ALLOW_PLAINTEXT_EXPORT": True,
+                "COOKIECLOUD_UUID": TEST_CC_USER,
+                "COOKIECLOUD_PASSWORD": TEST_CC_KEY,
+            })
+
+        self.assertFalse(success)
+        self.assertIn("CookieCloudDecryptError", reason)
+        self.assertNotIn(TEST_CC_USER, reason)
+        self.assertNotIn(TEST_CC_KEY, reason)
+
+    def test_cookie_file_write_wraps_os_errors(self):
+        with patch("builtins.open", side_effect=PermissionError("sensitive local path")):
+            with self.assertRaisesRegex(CookieCloudWriteError, "文件写入失败") as raised:
+                _write_cookie_file(str(self.sync_absolute_path), "cookie-content")
+
+        self.assertNotIn("sensitive local path", str(raised.exception))
 
 
 if __name__ == "__main__":

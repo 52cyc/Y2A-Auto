@@ -32,6 +32,18 @@ _YOUTUBE_USER_AGENT = (
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
     '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 )
+_INTERNAL_YT_DLP_FLAG = '--y2a-internal-yt-dlp'
+_YT_DLP_UNAVAILABLE_MESSAGE = '本地 yt-dlp 不可用，请重新安装依赖或重新下载完整便携包。'
+
+
+class YtDlpUnavailableError(RuntimeError):
+    """本地 yt-dlp 命令入口不可用。"""
+
+
+def _format_unexpected_download_error(exc: Exception) -> str:
+    if isinstance(exc, YtDlpUnavailableError):
+        return str(exc)
+    return f"下载过程中发生未预期的错误: {exc}"
 
 # 项目根目录，使用工具函数以兼容开发环境和 PyInstaller 打包环境，并使用 realpath 解析符号链接
 _BASE_DIR = os.path.realpath(get_app_root_dir())
@@ -258,14 +270,20 @@ def _summarize_yt_dlp_error(stdout_text: str | None, stderr_text: str | None) ->
 
 
 def _find_yt_dlp_command(log: logging.Logger) -> list[str]:
-    """解析 yt-dlp 调用命令，优先使用当前解释器 python -m yt_dlp。"""
+    """解析 yt-dlp 调用命令，冻结环境优先使用主程序内置入口。"""
     log.info("开始查找yt-dlp执行命令...")
 
     current_python = sys.executable
     if current_python:
+        if getattr(sys, 'frozen', False):
+            current_command = [current_python, _INTERNAL_YT_DLP_FLAG]
+            command_label = f"冻结程序内置yt-dlp: {current_python} {_INTERNAL_YT_DLP_FLAG}"
+        else:
+            current_command = [current_python, '-m', 'yt_dlp']
+            command_label = f"当前Python解释器调用yt-dlp: {current_python} -m yt_dlp"
         try:
             result = subprocess.run(
-                [current_python, '-m', 'yt_dlp', '--version'],
+                [*current_command, '--version'],
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -273,10 +291,10 @@ def _find_yt_dlp_command(log: logging.Logger) -> list[str]:
                 errors='replace'
             )
             if result.returncode == 0:
-                log.info(f"使用当前Python解释器调用yt-dlp: {current_python} -m yt_dlp")
-                return [current_python, '-m', 'yt_dlp']
+                log.info(f"使用{command_label}")
+                return current_command
         except Exception as exc:
-            log.debug(f"验证当前Python解释器中的yt-dlp失败: {exc}")
+            log.debug(f"验证{command_label}失败: {exc}")
 
     found = _which('yt-dlp')
     if found:
@@ -299,8 +317,8 @@ def _find_yt_dlp_command(log: logging.Logger) -> list[str]:
             log.info(f"回退到虚拟环境中的yt-dlp.exe: {venv_path}")
             return [venv_path]
 
-    log.info("未找到显式yt-dlp路径，回退到PATH中的yt-dlp")
-    return ['yt-dlp']
+    log.error(_YT_DLP_UNAVAILABLE_MESSAGE)
+    raise YtDlpUnavailableError(_YT_DLP_UNAVAILABLE_MESSAGE)
 
 
 def is_docker_env() -> bool:
@@ -534,6 +552,9 @@ def test_video_availability(youtube_url, yt_dlp_cmd, cookies_path=None, logger=N
                 time.sleep(2)
                 continue
             return False, None, last_error
+        except FileNotFoundError as exc:
+            logger.error(_YT_DLP_UNAVAILABLE_MESSAGE)
+            raise YtDlpUnavailableError(_YT_DLP_UNAVAILABLE_MESSAGE) from exc
         except Exception as e:
             last_error = str(e)
             logger.error(f"格式检查出错: {last_error}")
@@ -625,7 +646,7 @@ def download_video_data(youtube_url, task_id=None, cookies_file_path=None, skip_
                     else:
                         logger.warning("CookieCloud同步成功但未生成有效的cookie文件")
                 else:
-                    logger.warning("CookieCloud同步失败")
+                    logger.warning("CookieCloud同步失败: %s", sync_info)
             if not available:
                 logger.error("视频不可用或无法访问")
                 return False, "视频不可用或无法访问"
@@ -898,9 +919,9 @@ def download_video_data(youtube_url, task_id=None, cookies_file_path=None, skip_
                                 else:
                                     logger.warning("CookieCloud同步成功但未生成有效的cookie文件")
                             else:
-                                logger.warning("CookieCloud同步失败")
+                                logger.warning("CookieCloud同步失败: %s", sync_info)
                         except Exception as cc_exc:
-                            logger.warning(f"CookieCloud刷新Cookie时出错: {cc_exc}")
+                            logger.warning("CookieCloud刷新Cookie时发生未预期错误: %s", type(cc_exc).__name__)
 
                 if "The page needs to be reloaded." in combined_error:
                     if attempt < max_retries - 1 and '--cookies' in cmd:
@@ -970,6 +991,10 @@ def download_video_data(youtube_url, task_id=None, cookies_file_path=None, skip_
                     return False, error_msg
                 time.sleep(3)  # 超时后等待更长时间
                 continue
+
+            except FileNotFoundError as exc:
+                logger.error(_YT_DLP_UNAVAILABLE_MESSAGE)
+                raise YtDlpUnavailableError(_YT_DLP_UNAVAILABLE_MESSAGE) from exc
                 
             except Exception as e:
                 if cancel_event is not None and cancel_event.is_set():
@@ -1077,7 +1102,7 @@ def download_video_data(youtube_url, task_id=None, cookies_file_path=None, skip_
             return False, error_msg
         
     except Exception as e:
-        error_msg = f"下载过程中发生未预期的错误: {str(e)}"
+        error_msg = _format_unexpected_download_error(e)
         logger.error(error_msg)
         return False, error_msg
 
