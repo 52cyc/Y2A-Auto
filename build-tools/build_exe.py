@@ -216,7 +216,7 @@ hiddenimports = [
     'alibabacloud_tea_openapi.models',
     'alibabacloud_tea_util',
     'alibabacloud_tea_util.models',
-] + collect_submodules('cryptography')
+] + collect_submodules('cryptography') + collect_submodules('yt_dlp')
 
 a = Analysis(
     ['setup_app.py'],
