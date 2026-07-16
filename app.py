@@ -3029,9 +3029,13 @@ def acfun_qrcode_status(session_id):
 def bilibili_qrcode_start():
     """发起 bilibili 二维码登录并返回二维码图片。"""
     config = load_config()
-    cookie_path = config.get('BILIBILI_COOKIES_PATH', 'cookies/bili_cookies.json')
-    if not os.path.isabs(cookie_path):
-        cookie_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), cookie_path)
+    cookie_path = resolve_cookie_file_path(
+        path_value=config.get('BILIBILI_COOKIES_PATH', 'cookies/bili_cookies.json'),
+        default_relative_path='cookies/bili_cookies.json',
+        service_name='Bilibili',
+        logger_obj=logger,
+        allow_json_txt_fallback=False
+    )
 
     try:
         session_id, qr_session = _create_bilibili_qr_session()
@@ -3057,9 +3061,13 @@ def bilibili_qrcode_status(session_id):
         return jsonify({'success': False, 'message': '二维码会话不存在或已过期'}), 404
 
     config = load_config()
-    cookie_path = config.get('BILIBILI_COOKIES_PATH', 'cookies/bili_cookies.json')
-    if not os.path.isabs(cookie_path):
-        cookie_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), cookie_path)
+    cookie_path = resolve_cookie_file_path(
+        path_value=config.get('BILIBILI_COOKIES_PATH', 'cookies/bili_cookies.json'),
+        default_relative_path='cookies/bili_cookies.json',
+        service_name='Bilibili',
+        logger_obj=logger,
+        allow_json_txt_fallback=False
+    )
 
     try:
         status_data = qr_session.check_status(cookie_file=cookie_path)

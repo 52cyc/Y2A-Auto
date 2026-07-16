@@ -10,6 +10,54 @@ from modules import task_manager
 
 
 class CookiePathResolutionTests(unittest.TestCase):
+    def test_bilibili_cookie_path_uses_application_root(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            expected = pathlib.Path(temp_dir) / "cookies" / "bili_cookies.json"
+
+            with mock.patch.object(task_manager, "get_app_root_dir", return_value=temp_dir):
+                resolved = task_manager.resolve_cookie_file_path(
+                    "cookies/bili_cookies.json",
+                    "cookies/bili_cookies.json",
+                    service_name="Bilibili",
+                )
+
+            self.assertEqual(os.path.normpath(resolved), os.path.normpath(str(expected)))
+
+    def test_bilibili_call_sites_use_shared_cookie_path_resolver(self):
+        root = pathlib.Path(__file__).resolve().parents[1]
+        app_tree = ast.parse((root / "app.py").read_text(encoding="utf-8"))
+        task_manager_tree = ast.parse(
+            (root / "modules" / "task_manager.py").read_text(encoding="utf-8")
+        )
+
+        functions = {
+            node.name: node
+            for tree in (app_tree, task_manager_tree)
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name in {
+                "bilibili_qrcode_start",
+                "bilibili_qrcode_status",
+                "_do_upload_to_bilibili",
+            }
+        }
+
+        self.assertEqual(
+            set(functions),
+            {"bilibili_qrcode_start", "bilibili_qrcode_status", "_do_upload_to_bilibili"},
+        )
+        for function_node in functions.values():
+            called_names = {
+                node.func.id
+                for node in ast.walk(function_node)
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            }
+            referenced_names = {
+                node.id for node in ast.walk(function_node) if isinstance(node, ast.Name)
+            }
+            self.assertIn("resolve_cookie_file_path", called_names)
+            self.assertNotIn("__file__", referenced_names)
+
     def test_configured_youtube_cookie_path_has_priority_over_legacy_file(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)

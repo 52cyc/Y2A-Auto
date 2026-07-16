@@ -1,8 +1,10 @@
 import ast
 import importlib
+import json
 import pathlib
 import re
 import sys
+import tempfile
 import types
 import unittest
 from typing import Optional
@@ -10,6 +12,15 @@ from unittest import mock
 
 
 class BilibiliRuntimeTests(unittest.TestCase):
+    def test_pyinstaller_configs_collect_curl_cffi_runtime(self):
+        root = pathlib.Path(__file__).resolve().parents[1]
+        source = (root / "build-tools" / "build_exe.py").read_text(encoding="utf-8")
+
+        self.assertIn("collect_all('curl_cffi')", source)
+        self.assertIn("datas += curl_cffi_datas", source)
+        self.assertIn("binaries=curl_cffi_binaries", source)
+        self.assertIn("+ curl_cffi_hiddenimports", source)
+
     def test_configure_runtime_sets_impersonate_once(self):
         import modules.bilibili_runtime as runtime
 
@@ -59,6 +70,89 @@ class BilibiliRuntimeTests(unittest.TestCase):
         self.assertEqual(cookies["DedeUserID__ckMd5"], "allowed")
         self.assertNotIn("_logger", cookies)
         self.assertNotIn("random_state", cookies)
+
+
+class BilibiliAuthTests(unittest.TestCase):
+    def test_save_credential_writes_required_cookies(self):
+        from modules.bilibili_auth import save_credential_to_file
+
+        credential = mock.Mock()
+        credential.get_cookies.return_value = {
+            "SESSDATA": "sess",
+            "bili_jct": "csrf",
+            "DedeUserID": "123",
+            "buvid3": "buvid",
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cookie_path = pathlib.Path(temp_dir) / "cookies" / "bili_cookies.json"
+
+            self.assertTrue(save_credential_to_file(credential, str(cookie_path)))
+
+            cookie_items = json.loads(cookie_path.read_text(encoding="utf-8"))
+            cookies = {item["name"]: item["value"] for item in cookie_items}
+            self.assertEqual(cookies["SESSDATA"], "sess")
+            self.assertEqual(cookies["bili_jct"], "csrf")
+            self.assertEqual(cookies["DedeUserID"], "123")
+            self.assertEqual(cookies["buvid3"], "buvid")
+
+    def test_save_credential_does_not_write_when_cookie_extraction_fails(self):
+        from modules.bilibili_auth import save_credential_to_file
+
+        credential = mock.Mock()
+        credential.get_cookies.side_effect = RuntimeError("cookie extraction failed")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cookie_path = pathlib.Path(temp_dir) / "cookies" / "bili_cookies.json"
+
+            self.assertFalse(save_credential_to_file(credential, str(cookie_path)))
+            self.assertFalse(cookie_path.exists())
+
+    def test_save_credential_does_not_overwrite_for_missing_required_cookie(self):
+        from modules.bilibili_auth import save_credential_to_file
+
+        credential = mock.Mock()
+        credential.get_cookies.return_value = {
+            "SESSDATA": "sess",
+            "bili_jct": "csrf",
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cookie_path = pathlib.Path(temp_dir) / "bili_cookies.json"
+            cookie_path.write_text("existing", encoding="utf-8")
+
+            self.assertFalse(save_credential_to_file(credential, str(cookie_path)))
+            self.assertEqual(cookie_path.read_text(encoding="utf-8"), "existing")
+
+    def test_qrcode_done_becomes_failed_when_cookie_save_fails(self):
+        import modules.bilibili_auth as auth
+
+        session = object.__new__(auth.BilibiliQrLoginSession)
+        session.generated = True
+        session.last_state = None
+        session.qr = mock.Mock()
+        credential = mock.Mock()
+        session.qr.get_credential.return_value = credential
+
+        with mock.patch.object(
+            auth,
+            "_run_async",
+            return_value=auth.login_v2.QrCodeLoginEvents.DONE,
+        ), mock.patch.object(
+            auth,
+            "validate_credential_remote",
+            return_value=(True, "ok"),
+        ), mock.patch.object(
+            auth,
+            "save_credential_to_file",
+            return_value=False,
+        ):
+            payload = session.check_status("cookies/bili_cookies.json")
+
+        self.assertEqual(payload["status"], "failed")
+        self.assertFalse(payload["cookies_saved"])
+        self.assertIn("保存失败", payload["message"])
+        self.assertNotIn("credential_ok", payload)
 
 
 class BilibiliUploaderDiagnosticTests(unittest.TestCase):
