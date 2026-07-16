@@ -175,12 +175,21 @@ def save_credential_to_file(credential: Credential, cookie_file: str) -> bool:
     if not cookie_file:
         return False
 
-    os.makedirs(os.path.dirname(cookie_file) or ".", exist_ok=True)
-
     try:
         cookies = credential.get_cookies()
-    except Exception:
-        cookies = {}
+    except Exception as exc:
+        logger.error("读取 Bilibili 登录 Cookie 失败: %s", exc)
+        return False
+
+    if not isinstance(cookies, dict):
+        logger.error("读取 Bilibili 登录 Cookie 失败: 返回格式无效")
+        return False
+
+    required_keys = ["SESSDATA", "bili_jct", "DedeUserID"]
+    missing_keys = [key for key in required_keys if not str(cookies.get(key) or "").strip()]
+    if missing_keys:
+        logger.error("Bilibili 登录 Cookie 缺少必要字段: %s", ", ".join(missing_keys))
+        return False
 
     ordered_keys = [
         "SESSDATA",
@@ -220,8 +229,13 @@ def save_credential_to_file(credential: Credential, cookie_file: str) -> bool:
             }
         )
 
-    with open(cookie_file, "w", encoding="utf-8") as f:
-        json.dump(cookie_items, f, ensure_ascii=False, indent=2)
+    try:
+        os.makedirs(os.path.dirname(cookie_file) or ".", exist_ok=True)
+        with open(cookie_file, "w", encoding="utf-8") as f:
+            json.dump(cookie_items, f, ensure_ascii=False, indent=2)
+    except (OSError, TypeError, ValueError) as exc:
+        logger.error("保存 Bilibili 登录 Cookie 失败: %s", exc)
+        return False
     return True
 
 
@@ -270,10 +284,20 @@ class BilibiliQrLoginSession:
                 payload["message"] = msg
                 return payload
 
-            if cookie_file:
-                save_credential_to_file(credential, cookie_file)
-                payload["cookies_saved"] = True
-                payload["cookies_path"] = cookie_file
+            if not cookie_file:
+                payload["status"] = "failed"
+                payload["message"] = "Bilibili 登录成功，但未配置 Cookie 保存路径"
+                payload["cookies_saved"] = False
+                return payload
+
+            cookies_saved = save_credential_to_file(credential, cookie_file)
+            payload["cookies_saved"] = cookies_saved
+            if not cookies_saved:
+                payload["status"] = "failed"
+                payload["message"] = "Bilibili 登录成功，但 Cookies 保存失败"
+                return payload
+
+            payload["cookies_path"] = cookie_file
             payload["credential_ok"] = True
 
         return payload

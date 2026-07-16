@@ -8021,10 +8021,13 @@ class TaskProcessor:
                 except Exception:
                     pass
 
-        bilibili_cookies_path = self.config.get('BILIBILI_COOKIES_PATH', 'cookies/bili_cookies.json')
-        if bilibili_cookies_path and not os.path.isabs(bilibili_cookies_path):
-            app_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            bilibili_cookies_path = os.path.join(app_root, bilibili_cookies_path)
+        bilibili_cookies_path = resolve_cookie_file_path(
+            path_value=self.config.get('BILIBILI_COOKIES_PATH', 'cookies/bili_cookies.json'),
+            default_relative_path='cookies/bili_cookies.json',
+            service_name='Bilibili',
+            logger_obj=task_logger,
+            allow_json_txt_fallback=False,
+        )
 
         # 固定 bilibili 分区优先；否则使用任务分区。并校验分区合法性
         task_partition_id = _get_task_partition_id(

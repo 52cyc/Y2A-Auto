@@ -3146,7 +3146,11 @@ document.addEventListener('DOMContentLoaded', function () {
                 } else if (status === 'confirm') {
                     setBiliStatus('等待手机端确认登录', 'neutral');
                 } else if (status === 'done') {
-                    setBiliStatus('登录成功，Cookies 已保存', 'success');
+                    if (data.cookies_saved === true) {
+                        setBiliStatus('登录成功，Cookies 已保存', 'success');
+                    } else {
+                        setBiliStatus(data.message || '登录成功，但 Cookies 保存失败', 'error');
+                    }
                     stopBiliPolling();
                 } else if (status === 'timeout') {
                     setBiliStatus('二维码已过期，请重新获取', 'error');

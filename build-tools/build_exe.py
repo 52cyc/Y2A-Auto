@@ -113,7 +113,10 @@ def create_spec_file():
     # 其余内容保持原样（隐藏导入等）
     spec_tail = '''
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_submodules
+
+curl_cffi_datas, curl_cffi_binaries, curl_cffi_hiddenimports = collect_all('curl_cffi')
+datas += curl_cffi_datas
 
 # 隐藏导入 - 包含所有可能需要的模块
 hiddenimports = [
@@ -216,12 +219,12 @@ hiddenimports = [
     'alibabacloud_tea_openapi.models',
     'alibabacloud_tea_util',
     'alibabacloud_tea_util.models',
-] + collect_submodules('cryptography') + collect_submodules('yt_dlp')
+] + collect_submodules('cryptography') + collect_submodules('yt_dlp') + curl_cffi_hiddenimports
 
 a = Analysis(
     ['setup_app.py'],
     pathex=[],
-    binaries=[],
+    binaries=curl_cffi_binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
