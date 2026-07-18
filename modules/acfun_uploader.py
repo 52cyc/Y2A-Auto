@@ -527,12 +527,16 @@ class AcfunUploader:
             return
         
         if not isinstance(result, dict) or result.get("result") != 0:
-            self.log(f"上传完成处理失败: {response.text}")
+            err_msg_obj = result.get("errMsg") if isinstance(result, dict) else {}
+            if not isinstance(err_msg_obj, dict):
+                err_msg_obj = {}
+            detail = err_msg_obj.get("error_msg") or result.get("error_msg") or ""
+            self.log(f"上传完成处理失败 (code={result.get('result')}): {detail} | 完整响应: {response.text}")
     
-    def create_video(self, video_key: int, filename: str, cancel_event=None) -> Optional[int]:
-        """创建视频"""
+    def create_video(self, video_key: int, filename: str, cancel_event=None):
+        """创建视频，返回 (video_id, error_message)。成功时 error_message 为空字符串。"""
         if cancel_event is not None and cancel_event.is_set():
-            return None
+            return None, "任务已取消"
         response = self.session.post(
             self.C_VIDEO_URL,
             data={
@@ -550,23 +554,28 @@ class AcfunUploader:
             result = response.json()
         except (ValueError, TypeError) as e:
             self.log(f"创建视频API响应JSON解析失败: {response.text}, 错误: {str(e)}")
-            return None
+            return None, f"创建视频API响应JSON解析失败: {str(e)}"
         
         if not isinstance(result, dict):
             self.log(f"创建视频API返回格式异常，响应不是字典类型: {response.text}")
-            return None
+            return None, "创建视频API返回格式异常"
         
         if result.get("result") != 0:
-            self.log(f"创建视频失败: {response.text}")
-            return None
+            # 尝试提取错误详情：优先 errMsg.error_msg，其次顶层 error_msg/msg
+            err_msg_obj = result.get("errMsg")
+            if not isinstance(err_msg_obj, dict):
+                err_msg_obj = {}
+            detail = err_msg_obj.get("error_msg") or result.get("error_msg") or result.get("msg") or f"code={result.get('result')}"
+            self.log(f"创建视频失败 (code={result.get('result')}): {detail} | 完整响应: {response.text}")
+            return None, f"创建视频失败: {detail}"
         
         video_id = result.get("videoId")
         if not video_id:
             self.log(f"创建视频成功但未获取到videoId: {response.text}")
-            return None
+            return None, "创建视频成功但未获取到videoId"
         
         self.upload_finish(video_key, cancel_event=cancel_event)
-        return video_id
+        return video_id, ""
     
     def upload_cover(self, image_path: str, mode='crop', cancel_event=None) -> str:
         """上传封面图片（支持 jpg/png/webp，尽量保留原格式）"""
@@ -715,9 +724,9 @@ class AcfunUploader:
         # 创建视频
         if cancel_event is not None and cancel_event.is_set():
             return False, "任务已取消"
-        video_id = self.create_video(int(task_id), file_name, cancel_event=cancel_event)
+        video_id, create_err = self.create_video(int(task_id), file_name, cancel_event=cancel_event)
         if not video_id:
-            return False, "创建视频失败"
+            return False, create_err or "创建视频失败"
         
         # 上传封面
         cover_url = self.upload_cover(cover_path, cancel_event=cancel_event)
@@ -771,35 +780,28 @@ class AcfunUploader:
                     "cover_url": cover_url
                 }, 0, ""
 
-            # 失败结构A：{result:xxx, error_msg/msg}
-            if "result" in result:
-                result_code = result.get("result")
-                error_msg = result.get("error_msg") or result.get("msg") or "未知错误"
-                self.log(f"视频投稿失败: {response.text}")
-                err_code_int = None
-                try:
-                    err_code_int = int(result_code) if result_code is not None else None
-                except Exception:
-                    err_code_int = None
-                return False, f"视频投稿失败 (code={result_code if result_code is not None else '未知'}): {error_msg}", err_code_int, str(error_msg)
-
-            # 失败结构B：{errMsg:{result:..., error_msg:...}, isError:true}
+            # 统一错误解析：优先 errMsg.error_msg（当前标准格式），
+            # 再回退到顶层 result / error_msg / msg（兼容旧格式和网关层错误）。
             err_msg_obj = result.get("errMsg")
             if not isinstance(err_msg_obj, dict):
                 err_msg_obj = {}
-            err_code = err_msg_obj.get("result")
-            err_msg = err_msg_obj.get("error_msg") or result.get("error_msg") or result.get("msg") or "未知错误"
-            if result.get("isError") or err_msg:
-                self.log(f"视频投稿失败: {response.text}")
-                err_code_int = None
-                try:
-                    err_code_int = int(err_code) if err_code is not None else None
-                except Exception:
-                    err_code_int = None
-                return False, f"视频投稿失败 (code={err_code or '未知'}): {err_msg}", err_code_int, str(err_msg)
+            # 错误码：优先从 errMsg.result 取，没有则从顶层 result 取
+            raw_code = err_msg_obj.get("result") if err_msg_obj.get("result") is not None else result.get("result")
+            # 消息：errMsg.error_msg > 顶层 error_msg > 顶层 msg
+            captured_msg = (
+                err_msg_obj.get("error_msg") or
+                result.get("error_msg") or
+                result.get("msg") or
+                "未知错误"
+            )
 
-            self.log(f"API返回格式异常，缺少result字段: {response.text}")
-            return False, f"API返回格式异常: {err_msg}", None, str(err_msg)
+            self.log(f"视频投稿失败: {response.text}")
+            err_code_int = None
+            try:
+                err_code_int = int(raw_code) if raw_code is not None else None
+            except Exception:
+                err_code_int = None
+            return False, f"视频投稿失败 (code={raw_code if raw_code is not None else '未知'}): {captured_msg}", err_code_int, str(captured_msg)
 
         ok, payload_or_err, _, _ = _submit_create_douga(desc)
         return ok, payload_or_err
