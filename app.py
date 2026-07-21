@@ -3872,7 +3872,7 @@ if __name__ == '__main__':
     download_cleanup_scheduler = schedule_download_cleanup()
 
     try:
-        port = int(os.environ.get('PORT', 5000))
+        port = int(os.environ.get('PORT', 5100))
         logger.info(f"服务启动，监听地址: http://127.0.0.1:{port}")
         # 使用标准Flask运行
         app.run(host='0.0.0.0', port=port, debug=False)

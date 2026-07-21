@@ -73,12 +73,40 @@ def _resolve_safe_cookies_path(cookies_file_path: str, log: logging.Logger | Non
     return resolved
 
 
+# def _detect_js_runtime_args() -> list[str]:
+#     """检测可供 yt-dlp 使用的 JS runtime。"""
+#     args: list[str] = []
+#     for runtime in ('deno', 'node'):
+#         if _which(runtime):
+#             args.extend(['--js-runtimes', runtime])
+#     return args
+
 def _detect_js_runtime_args() -> list[str]:
     """检测可供 yt-dlp 使用的 JS runtime。"""
     args: list[str] = []
-    for runtime in ('deno', 'node'):
-        if _which(runtime):
-            args.extend(['--js-runtimes', runtime])
+
+    # 优先 Deno
+    deno = _which("deno")
+    if deno:
+        args.extend(["--js-runtimes", f"deno:{deno}"])
+        return args
+
+    # 优先使用 Homebrew 的 Node 22（macOS）
+    preferred_nodes = [
+        "/opt/homebrew/opt/node@22/bin/node",  # Apple Silicon
+        "/usr/local/opt/node@22/bin/node",     # Intel Mac
+    ]
+
+    for node in preferred_nodes:
+        if os.path.isfile(node):
+            args.extend(["--js-runtimes", f"node:{node}"])
+            return args
+
+    # 最后回退到 PATH 中的 node
+    node = _which("node")
+    if node:
+        args.extend(["--js-runtimes", f"node:{node}"])
+
     return args
 
 
